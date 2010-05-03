@@ -1,0 +1,8 @@
+#!/usr/bin/env python
+##########
+# settings
+##########
+host="host of mysql server"
+user="mysql username"
+password="mysql pass"
+database="mysql database"
