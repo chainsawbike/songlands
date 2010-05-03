@@ -22,7 +22,6 @@ def application(environ, start_response):
 <head>
 <meta http-equiv="Content-Type" content="text/html;charset=utf-8" />
 <link rel="stylesheet" type="text/css" href="media/slp.css" />
-<meta name="verify-v1" content="vlR5A44ZJpnutUDSu4oF3G4Sh54LaOVUo3oe5y1r0lw=" />
 <title>songlands ponies</title>
 </head><body>
 	<div id="header">
