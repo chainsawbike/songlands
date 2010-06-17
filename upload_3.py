@@ -27,6 +27,7 @@ import settings
 class upload_3:
 	short_input_limit=50
 	text_box_input_limit=250
+	imageset={}
 ############
 # init stuff
 ############
@@ -75,7 +76,7 @@ class upload_3:
 			args = (self.text_in(self.shortname.get_active_text()), self.imagebuffer.getvalue(), self.text_in(self.imagetitle.get_text()), )
 			self.mysql_put(sql, args)
 
-	def mysql_update(selptyyf):
+	def mysql_update(self):
 		if self.shortname.get_active_text() == '' or self.catogery.get_active_text() == '':
 			dialog = gtk.Dialog("My dialog",None,gtk.DIALOG_MODAL | gtk.DIALOG_DESTROY_WITH_PARENT,(gtk.STOCK_OK,gtk.RESPONSE_CLOSE))
 			dialog.vbox.pack_start(gtk.Label("you need to fill in atleast the \n catogery and short name sections"))
@@ -118,12 +119,13 @@ class upload_3:
 		text = text.replace("__1_","_")
 		return text
 
-	def show_image(self,image):
+	def show_image(self,widget,id):
+		images = self.mysql_get("images","image","id = '"+ str(id) +"'")
 		fd = StringIO.StringIO()
-		image.save(fd, "ppm")
+		fd.write(images[0]['image'])
 		contents = fd.getvalue()
 		fd.close()
-		loader = gtk.gdk.PixbufLoader("pnm")
+		loader = gtk.gdk.PixbufLoader()
 		loader.write(contents, len(contents))
 		pixbuf = loader.get_pixbuf()
 		loader.close()
@@ -146,15 +148,21 @@ class upload_3:
 			if(rows[0]['fullname']):
 				self.fullname.set_text(self.text_out(rows[0]['fullname']))
 			if(rows[0]['for_sale']):
-				print self.text_out(rows[0]['for_sale'])
 				if (self.text_out(rows[0]['for_sale']) == "For sale"):
 					self.forsale.set_active(1)
 				if (self.text_out(rows[0]['for_sale']) == "sold"):
 					self.forsale.set_active(2)
 			else:
 				self.forsale.set_active(0)
-			#if(rows[0]['section']):
-				#self.section.set_text(self.text_out(rows[0]['section']))
+			if(rows[0]['height']):
+				self.height.set_text(self.text_out(rows[0]['height']))
+			if(rows[0]['section']):
+				if (rows[0]['section'])== "Sec__7_A":
+					self.section.set_active(1)
+				elif (rows[0]['section'])== "Sec__7_B":
+					self.section.set_active(2)
+			else:
+				self.section.set_active(0)
 			if(rows[0]['sire']):
 				self.sire.set_text(self.text_out(rows[0]['sire']))
 			if(rows[0]['dam']):
@@ -163,11 +171,20 @@ class upload_3:
 				blurbbuffer = self.blurb.get_buffer()
 				blurbbuffer.set_text(self.text_out(rows[0]['blurb']))
 				self.blurb.set_buffer(blurbbuffer)
-			self.imagename.get_model().clear()
-			images = self.mysql_get("images","image ,id","shortname = '"+self.text_in(self.shortname.get_active_text()) +"'")
+			images = self.mysql_get("images","id","shortname = '"+self.text_in(self.shortname.get_active_text()) +"'")
+			if self.imageset:
+				for line in self.imageset:
+					self.imageset[line].destroy()
+				self.imageset.clear()
 			for image in images:
-				self.imagename.append_text(str(image['id']))
-				self.imagename.set_active_iter(self.imagename.get_model().get_iter_first())
+				#make a button for each image
+				self.imageset[str(image['id'])] = gtk.Button(str(image['id']))
+				self.imageset[str(image['id'])].connect("clicked", self.show_image, image['id'])
+				self.imagetopvbox.pack_start(self.imageset[str(image['id'])],True)
+				self.imageset[str(image['id'])].show()
+			#show the last one (its eaiser :P)
+			self.show_image("",image['id'])
+
 		else:
 			self.fullname.set_text("")
 			self.sire.set_text("")
@@ -185,6 +202,7 @@ class upload_3:
 		im = im.resize(imgresult)
 		im.save(self.imagebuffer,"jpeg")
 		pixbuf = self.show_image(im)
+
 ###########
 # gui setup
 ###########
@@ -192,7 +210,7 @@ class upload_3:
 		self.mysql_connect()
 		self.window = gtk.Window(gtk.WINDOW_TOPLEVEL)
 		self.window.set_title(settings.host)
-		self.window.set_default_size(800,780)
+		self.window.set_default_size(700,855)
 		self.window.connect("delete_event", self.delete_event)
 		self.window.set_border_width(10)
 		#layout setup
@@ -218,7 +236,6 @@ class upload_3:
 		self.imagetopvbox=gtk.VBox()
 		imagetophbox.pack_start(self.imagetopvbox,False)
 		self.imagetopvbox.pack_start(gtk.Label("image:"),False)
-
 
 		imagehbox = gtk.HBox()
 		imagevbox.pack_start(imagehbox,False)
@@ -269,6 +286,13 @@ class upload_3:
 		#short name
 		vbox2.pack_start(gtk.Label("short name:"))
 		self.shortname = gtk.combo_box_entry_new_text()
+		#rows = self.mysql_get("data","shortname")
+		#srows = []
+		#for x in rows:
+		#	if x not in srows:
+		#		srows.append(x)
+		#for row in srows:
+		#	self.shortname.append_text(self.text_out(row["shortname"]))
 		vbox3.pack_start(self.shortname)
 		self.shortname.connect("changed", self.update_entry)
 
@@ -277,7 +301,7 @@ class upload_3:
 		self.fullname = gtk.Entry(40)
 		vbox3.pack_start(self.fullname)
 
-		#section/for_sale
+		#section/for_sale/height
 		vbox2.pack_start(gtk.Label("for sale?:"))
 		self.forsale = gtk.combo_box_new_text()
 		forsaleopts = ["no","for sale","sold"]
@@ -293,8 +317,8 @@ class upload_3:
 		hboxforsale.pack_start(self.height)
 
 		hboxforsale.pack_start(gtk.Label("section:"))
-		self.section = gtk.combo_box_entry_new_text()
-		sectionopts = ["sec A","sec B"]
+		self.section = gtk.combo_box_new_text()
+		sectionopts = ["","sec A","sec B"]
 		for x in sectionopts:
 			self.section.append_text(self.text_out(x))
 		hboxforsale.pack_start(self.section)
