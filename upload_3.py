@@ -47,10 +47,13 @@ class upload_3:
 #event handling
 ###############
 	def process_update(self,event):
-		#self.mysql_image_upload()
-		self.mysql_update()
-		if not self.new:
+		if self.new:
+			self.mysql_image_upload()
+			self.mysql_update()
 			self.delete_event()
+		if not self.new:
+			self.mysql_update()
+
 #############
 # mysql stuff
 #############
@@ -71,30 +74,47 @@ class upload_3:
 		cursor.close ()
 
 	def mysql_image_upload(self):
+		#if there was an image on the commandline
 		if self.new:
-			sql='INSERT INTO images (shortname, image, caption) VALUES (%s, %s,%s)'
+			sql='INSERT INTO images (shortname, image, caption) VALUES (%s,%s,%s)'
 			args = (self.text_in(self.shortname.get_active_text()), self.imagebuffer.getvalue(), self.text_in(self.imagetitle.get_text()), )
 			self.mysql_put(sql, args)
 
+	def dialog(self,reason):
+		dialog = gtk.Dialog("Error",None,gtk.DIALOG_MODAL | gtk.DIALOG_DESTROY_WITH_PARENT,(gtk.STOCK_OK,gtk.RESPONSE_CLOSE))
+		dialog.vbox.pack_start(gtk.Label(reason))
+		dialog.show_all()
+		dialog.run()
+		dialog.destroy()
+
 	def mysql_update(self):
+		#if the shortname or catogery entry boxes are empty
 		if self.shortname.get_active_text() == '' or self.catogery.get_active_text() == '':
-			dialog = gtk.Dialog("My dialog",None,gtk.DIALOG_MODAL | gtk.DIALOG_DESTROY_WITH_PARENT,(gtk.STOCK_OK,gtk.RESPONSE_CLOSE))
-			dialog.vbox.pack_start(gtk.Label("you need to fill in atleast the \n catogery and short name sections"))
-			dialog.show_all()
-			dialog.run()
-			dialog.destroy()
+			self.dialog("you need to fill in atleast the \ncatogery and short name sections")
 		else:
+			update=False
+			#if there was an image on the command line
 			if self.new:
 				rows = self.mysql_get("data","*")
+				#is this a new horse?
 				for row in rows:
 					if self.text_in(self.shortname.get_active_text()) == row["shortname"] and self.text_in(self.catogery.get_active_text()) == row['cat'] :
 						update=False
 						break
-				if update and not self.new:
-					print "updating"
-					sql='INSERT INTO data (shortname, cat, fullname, for_sale, section, height, sire, dam, blurb, sort) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s,%s )'
-					args=(self.text_in(self.shortname.get_active_text()), self.text_in(self.catogery.get_active_text()), self.text_in(self.fullname.get_text()), self.text_in(self.forsale.get_active_text()), self.text_in(self.section.get_active_text()), self.text_in(self.height.get_text()), self.text_in(self.sire.get_text()),self.text_in(self.dam.get_text()),  self.text_in(self.blurb.get_buffer().get_text(self.blurb.get_buffer().get_start_iter(), self.blurb.get_buffer().get_end_iter())), "15", )
-					self.mysql_put(sql, args)
+					else:
+						update=True
+
+			if not update:
+				#not a new horse
+				sql='UPDATE data SET fullname=%s, for_sale=%s, section=%s, height=%s, sire=%s, dam=%s, blurb=%s, sort=%s WHERE shortname=%s AND cat=%s LIMIT 1'
+				args=(self.text_in(self.fullname.get_text()), self.text_in(self.forsale.get_active_text()), self.text_in(self.section.get_active_text()), self.text_in(self.height.get_text()), self.text_in(self.sire.get_text()),self.text_in(self.dam.get_text()), self.text_in(self.blurb.get_buffer().get_text(self.blurb.get_buffer().get_start_iter(), self.blurb.get_buffer().get_end_iter())), "15",self.text_in(self.shortname.get_active_text()), self.text_in(self.catogery.get_active_text()), )
+			elif self.new:
+				#new horse
+				sql='INSERT INTO data (shortname, cat, fullname, for_sale, section, height, sire, dam, blurb, sort) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)'
+				args=(self.text_in(self.shortname.get_active_text()), self.text_in(self.catogery.get_active_text()), self.text_in(self.fullname.get_text()), self.text_in(self.forsale.get_active_text()), self.text_in(self.section.get_active_text()), self.text_in(self.height.get_text()), self.text_in(self.sire.get_text()),self.text_in(self.dam.get_text()),  self.text_in(self.blurb.get_buffer().get_text(self.blurb.get_buffer().get_start_iter(), self.blurb.get_buffer().get_end_iter())), "15", )
+			else:
+				self.dialog("this should not appear \ntell aaron there was an error in the update/new sql data code")
+			self.mysql_put(sql, args)
 
 	def mysql_connect(self):
 		self.conn = MySQLdb.connect (host = settings.host,user = settings.user,passwd = settings.password ,db = settings.database)
@@ -102,13 +122,16 @@ class upload_3:
 # misc
 #######
 	def text_in(self,text):
-		i = 1
-		var = ["_","/","\'",";",",","\\"," "]
-		for char in var:
-			text = text.replace(char,"__"+str(i)+"_")
-			i += 1
-		text = text.strip().capitalize()
-		return text
+		if text:
+			i = 1
+			var = ["_","/","\'",";",",","\\"," "]
+			for char in var:
+				text = text.replace(char,"__"+str(i)+"_")
+				i += 1
+			text = text.strip().capitalize()
+			return text
+		else:
+			return ""
 
 	def text_out(self,text):
 		i = 2
@@ -120,11 +143,16 @@ class upload_3:
 		return text
 
 	def show_image(self,widget,id):
-		images = self.mysql_get("images","image","id = '"+ str(id) +"'")
-		fd = StringIO.StringIO()
-		fd.write(images[0]['image'])
-		contents = fd.getvalue()
-		fd.close()
+		if id == "new":
+			contents = self.imagebuffer.getvalue()
+			print "hi"
+		else:
+			images = self.mysql_get("images","image","id = '"+ str(id) +"'")
+			fd = StringIO.StringIO()
+			fd.write(images[0]['image'])
+			print "lo"
+			contents = fd.getvalue()
+			fd.close()
 		loader = gtk.gdk.PixbufLoader()
 		loader.write(contents, len(contents))
 		pixbuf = loader.get_pixbuf()
@@ -182,8 +210,10 @@ class upload_3:
 				self.imageset[str(image['id'])].connect("clicked", self.show_image, image['id'])
 				self.imagetopvbox.pack_start(self.imageset[str(image['id'])],True)
 				self.imageset[str(image['id'])].show()
-			#show the last one (its eaiser :P)
-			self.show_image("",image['id'])
+			if not self.new:
+				#if not adding a new image
+				#show the last one (its eaiser :P)
+				self.show_image("",image['id'])
 
 		else:
 			self.fullname.set_text("")
@@ -201,7 +231,12 @@ class upload_3:
 		imgresult = 600,imgsize
 		im = im.resize(imgresult)
 		im.save(self.imagebuffer,"jpeg")
-		pixbuf = self.show_image(im)
+		newimagebutton = gtk.Button("new")
+		newimagebutton.connect("clicked", self.show_image,"new")
+		self.imagetopvbox.pack_start(newimagebutton,True)
+		newimagebutton.show()
+		self.show_image("","new")
+
 
 ###########
 # gui setup
