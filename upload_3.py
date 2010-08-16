@@ -23,11 +23,18 @@ from PIL import Image
 import sys
 import os
 import StringIO
-import settings
+#import settings
 class upload_3:
 	short_input_limit=50
 	text_box_input_limit=250
 	imageset={}
+	currentimage=None
+## you need to set this stuff##############################################
+	host=""
+	user=""
+	database=""
+	password=""
+## up to here :) ##########################################################
 ############
 # init stuff
 ############
@@ -53,6 +60,9 @@ class upload_3:
 			self.delete_event()
 		if not self.new:
 			self.mysql_update()
+			print(self.currentimage)
+			self.mysql_image_mangle("","update")
+
 
 #############
 # mysql stuff
@@ -78,6 +88,18 @@ class upload_3:
 		if self.new:
 			sql='INSERT INTO images (shortname, image, caption) VALUES (%s,%s,%s)'
 			args = (self.text_in(self.shortname.get_active_text()), self.imagebuffer.getvalue(), self.text_in(self.imagetitle.get_text()), )
+			self.mysql_put(sql, args)
+
+	def mysql_image_mangle(self,widget,action):
+		id = self.currentimage
+		print id
+		if action:
+			if action == "update":
+				sql='UPDATE images SET caption=%s WHERE id=%s LIMIT 1'
+				args=(self.text_in(self.imagetitle.get_text()),id)
+			elif action == "delete":
+				sql='DELETE FROM images WHERE id=%s LIMIT 1'
+				args=(id, )
 			self.mysql_put(sql, args)
 
 	def dialog(self,reason):
@@ -117,7 +139,7 @@ class upload_3:
 			self.mysql_put(sql, args)
 
 	def mysql_connect(self):
-		self.conn = MySQLdb.connect (host = settings.host,user = settings.user,passwd = settings.password ,db = settings.database)
+		self.conn = MySQLdb.connect (host = self.host,user = self.user,passwd = self.password ,db = self.database)
 #######
 # misc
 #######
@@ -143,22 +165,26 @@ class upload_3:
 		return text
 
 	def show_image(self,widget,id):
+		if self.currentimage:
+			self.mysql_image_mangle("","update")
 		if id == "new":
 			contents = self.imagebuffer.getvalue()
-			print "hi"
+			self.imagetitle.set_text("")
 		else:
-			images = self.mysql_get("images","image","id = '"+ str(id) +"'")
+			images = self.mysql_get("images","*","id = '"+ str(id) +"'")
 			fd = StringIO.StringIO()
 			fd.write(images[0]['image'])
-			print "lo"
 			contents = fd.getvalue()
 			fd.close()
+			self.imagetitle.set_text(self.text_out(images[0]['caption']))
 		loader = gtk.gdk.PixbufLoader()
 		loader.write(contents, len(contents))
 		pixbuf = loader.get_pixbuf()
 		loader.close()
 		self.image.set_from_pixbuf(pixbuf)
 		self.image.show()
+		self.currentimage = id
+
 
 	def update_short_name(self, widget):
 		rows = self.mysql_get("data","shortname","cat = '"+self.text_in(self.catogery.get_active_text())+"'")
@@ -171,35 +197,48 @@ class upload_3:
 			self.shortname.append_text(self.text_out(row['shortname']))
 
 	def update_entry(self, widget):
+		if self.currentimage:
+			self.mysql_image_mangle("","update")
 		rows = self.mysql_get("data","*","shortname = '"+self.text_in(self.shortname.get_active_text()) +"' AND cat = '"+self.text_in(self.catogery.get_active_text())+"'")
 		if(len(rows) == 1):
+
 			if(rows[0]['fullname']):
 				self.fullname.set_text(self.text_out(rows[0]['fullname']))
 			if(rows[0]['for_sale']):
-				if (self.text_out(rows[0]['for_sale']) == "For sale"):
+				if (self.text_out(rows[0]['for_sale']).capitalize() == "For sale"):
 					self.forsale.set_active(1)
-				if (self.text_out(rows[0]['for_sale']) == "sold"):
+				elif (self.text_out(rows[0]['for_sale']).capitalize() == "Sold"):
 					self.forsale.set_active(2)
+				else:
+					self.forsale.set_active(0)
 			else:
 				self.forsale.set_active(0)
+
 			if(rows[0]['height']):
 				self.height.set_text(self.text_out(rows[0]['height']))
+
 			if(rows[0]['section']):
 				if (rows[0]['section'])== "Sec__7_A":
 					self.section.set_active(1)
 				elif (rows[0]['section'])== "Sec__7_B":
 					self.section.set_active(2)
+				else:
+					self.section.set_active(0)
 			else:
 				self.section.set_active(0)
+
 			if(rows[0]['sire']):
 				self.sire.set_text(self.text_out(rows[0]['sire']))
+
 			if(rows[0]['dam']):
 				self.dam.set_text(self.text_out(rows[0]['dam']))
+
 			if(rows[0]['blurb']):
 				blurbbuffer = self.blurb.get_buffer()
 				blurbbuffer.set_text(self.text_out(rows[0]['blurb']))
 				self.blurb.set_buffer(blurbbuffer)
 			images = self.mysql_get("images","id","shortname = '"+self.text_in(self.shortname.get_active_text()) +"'")
+
 			if self.imageset:
 				for line in self.imageset:
 					self.imageset[line].destroy()
@@ -214,7 +253,8 @@ class upload_3:
 				#if not adding a new image
 				#show the last one (its eaiser :P)
 				self.show_image("",image['id'])
-
+				self.currentimage = str(image['id'])
+				print self.currentimage
 		else:
 			self.fullname.set_text("")
 			self.sire.set_text("")
@@ -244,7 +284,7 @@ class upload_3:
 	def gui_setup(self):
 		self.mysql_connect()
 		self.window = gtk.Window(gtk.WINDOW_TOPLEVEL)
-		self.window.set_title(settings.host)
+		self.window.set_title(self.host)
 		self.window.set_default_size(700,855)
 		self.window.connect("delete_event", self.delete_event)
 		self.window.set_border_width(10)
@@ -262,29 +302,27 @@ class upload_3:
 		imageframe.set_shadow_type(gtk.SHADOW_ETCHED_OUT)
 		imageframe.add(imagevbox)
 		imagetophbox = gtk.HBox()
+
 		imagevbox.pack_start(imagetophbox,True)
 
 		imagewindow = gtk.ScrolledWindow()
 		imagewindow.set_policy(gtk.POLICY_AUTOMATIC, gtk.POLICY_AUTOMATIC)
-		imagetophbox.pack_start(imagewindow,True)
 
+		imagetophbox.pack_start(imagewindow,True)
+		# box for image preview
 		self.imagetopvbox=gtk.VBox()
 		imagetophbox.pack_start(self.imagetopvbox,False)
 		self.imagetopvbox.pack_start(gtk.Label("image:"),False)
 
-		imagehbox = gtk.HBox()
-		imagevbox.pack_start(imagehbox,False)
-
-		leftimagevbox = gtk.VBox()
-		imagehbox.pack_start(leftimagevbox,False)
-
-		rightimagevbox = gtk.VBox()
-		imagehbox.pack_start(rightimagevbox,True)
-
-		leftimagevbox.pack_start(gtk.Label("image caption:"))
-
+		#bottom box
+		image_data_box = gtk.HBox()
+		imagevbox.pack_start(image_data_box,False)
+		image_data_box.pack_start(gtk.Label("image caption:"),False)
 		self.imagetitle = gtk.Entry(40)
-		rightimagevbox.pack_start(self.imagetitle,False)
+		image_data_box.pack_start(self.imagetitle,True)
+		button_delete=gtk.Button("Delete image")
+		button_delete.connect("clicked", self.mysql_image_mangle,"delete",)
+		image_data_box.pack_start(button_delete,False)
 
 		self.image = gtk.Image()
 		imagewindow.add_with_viewport(self.image)
@@ -339,7 +377,7 @@ class upload_3:
 		#section/for_sale/height
 		vbox2.pack_start(gtk.Label("for sale?:"))
 		self.forsale = gtk.combo_box_new_text()
-		forsaleopts = ["no","for sale","sold"]
+		forsaleopts = ["No","For sale","Sold"]
 		for x in forsaleopts:
 			self.forsale.append_text(self.text_out(x))
 		self.forsale.set_active_iter(self.forsale.get_model().get_iter_first())
