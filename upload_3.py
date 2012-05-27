@@ -16,34 +16,150 @@
 #       MA 02110-1301, USA.
 
 import pygtk
+import gobject
 pygtk.require('2.0')
 import gtk
+gtk.threads_init()
 import MySQLdb
 from PIL import Image
 import sys
 import os
 import StringIO
-#import settings
+import threading
+import time
+
+############
+#move the status bar during updates
+############
+
+class statusbar(threading.Thread):
+
+
+	def run(self):
+		"""Run method, this is the code that runs while thread is alive."""
+		#Thread event, stops the thread if it is set.
+		self.stopthread = threading.Event()
+		gtk.threads_enter()
+		upload_3.update.hide()
+		upload_3.exit.hide()
+		upload_3.progressbar.show_now()
+		gtk.threads_leave()
+		#While the stopthread event isn't set, the thread keeps going on
+		#but go for atleast 1 seconds
+		delay = 0
+		while (self.stopthread.isSet() == False) or (delay <= 10):
+			gtk.threads_enter()
+			upload_3.progressbar.pulse()
+			gtk.threads_leave()
+			#Delaying 100ms until the next iteration
+			time.sleep(0.1)
+			print delay
+			delay +=1
+		gtk.threads_enter()
+		upload_3.progressbar.hide()
+		upload_3.update.show()
+		upload_3.exit.show_now()
+		gtk.threads_leave()
+		return
+
+
 class upload_3:
 	short_input_limit=50
 	text_box_input_limit=250
 	imageset={}
 	currentimage=None
+	horse_id = None
 ## you need to set this stuff##############################################
-	host=""
-	user=""
-	database=""
-	password=""
+	#host="server.lan"
+	#user="admin"
+	#database="site"
+	#password="reallyhard"
+
+	dbversion="1"
+
 ## up to here :) ##########################################################
 ############
 # init stuff
 ############
 	def initstuff(self):
+		self.gui_setup()
+		self.processing("connecting",False)
+		self.mysql_connect()
+		#is this the correct version for the database
+		rows = self.mysql_get("info","value","setting = 'version'")
+		if not (rows[0]["value"]) == self.dbversion:
+			self.dialog("this verison is to old - please contact aaron for an update")
+			self.delete_event()
 		if (len(sys.argv) <= 1):
 			self.new = False
 		else:
 			self.imagebuffer=StringIO.StringIO()
 			self.new=True
+		if self.new:
+			self.image_pre_process()
+		self.populate()
+		time.sleep(15)
+		self.processing("connecting",True)
+		return False
+##############
+#populate drop-down boxes
+##############
+	def populate(self):
+		#catogery
+		##sql abuse
+		cat_rows = self.mysql_get("data","cat")
+		cat_srows = []
+		self.cat_index = []
+		for cat_x in cat_rows:
+			if cat_x not in cat_srows:
+				cat_srows.append(cat_x)
+				self.catogery.append_text(self.text_out(cat_x["cat"]))
+				self.cat_index.append(cat_x["cat"])
+
+		#name
+		name_rows = self.mysql_get("data","fullname")
+		name_srows = []
+		self.nameindex = []
+		self.fullname.append_text("")
+		self.nameindex.append("")
+		for name_x in name_rows:
+			if name_x not in name_srows:
+				name_srows.append(name_x)
+				self.fullname.append_text(self.text_out(name_x["fullname"]))
+				self.nameindex.append(name_x["fullname"])
+		#grey out unnessary input boxes
+		if self.new == False:
+			#images
+			self.imagetitle.set_sensitive(False)
+			#general
+			self.catogery.set_sensitive(False)
+			self.forsale.set_sensitive(False)
+			self.height.set_sensitive(False)
+			self.section.set_sensitive(False)
+			self.sire.set_sensitive(False)
+			self.dam.set_sensitive(False)
+			self.blurb.set_sensitive(False)
+		#always set to locked
+		self.button_delete.set_sensitive(False)
+		self.button_delete_horse.set_sensitive(False)
+
+
+##############
+#hides exit/update buttons and puts a "procesing bar" there
+##############
+	def processing(self,action,complete):
+
+		if complete == False:
+			print "start"
+			self.statusthread = statusbar()
+			self.progressbar.set_text(action)
+			self.statusthread.start()
+			print "here"
+		else:
+			print "done"
+			self.statusthread.stopthread.set()
+			print "complete"
+
 ###############
 # exit function
 ###############
@@ -53,15 +169,56 @@ class upload_3:
 ###############
 #event handling
 ###############
+	def delete_horse(self,event):
+		self.processing("deleting horse",False)
+		if self.horse_id == None:
+			self.dialog("please select a horse to delete first")
+		else:
+			self.dialog("this is not reversable __setup the cancel system__")
+			self.mysql_put('DELETE FROM data WHERE horse_id={horse_id}'.format(horse_id=self.horse_id))
+			self.mysql_put('DELETE FROM images WHERE horse_id={horse_id}'.format(horse_id=self.horse_id))
+			#remove entry from fullname list
+			self.fullname.remove_text(self.fullnameindex.index(self.fullname.get_active_text()))
+			self.fullname.set_active(0)
+			#lock all un-needed entry
+			self.imagetitle.set_sensitive(False)
+			self.catogery.set_sensitive(False)
+			self.forsale.set_sensitive(False)
+			self.height.set_sensitive(False)
+			self.section.set_sensitive(False)
+			self.sire.set_sensitive(False)
+			self.dam.set_sensitive(False)
+			self.blurb.set_sensitive(False)
+			self.button_delete.set_sensitive(False)
+			self.button_delete_horse.set_sensitive(False)
+			self.processing("deleting horse",True)
+			############################################################################################
+
 	def process_update(self,event):
+		self.processing("updating",False)
+		# if this is a new photo:
 		if self.new:
-			self.mysql_image_upload()
-			self.mysql_update()
+			#if this is a new horse
+			if not self.horse_id:
+				self.horse_id = self.mysql_update()
+			else:
+				self.mysql_update(self.horse_id)
+			self.mysql_image_upload(self.horse_id)
 			self.delete_event()
+		# no new photo:
 		if not self.new:
-			self.mysql_update()
-			print(self.currentimage)
-			self.mysql_image_mangle("","update")
+			self.mysql_update(self.horse_id)
+			self.image_update("","update")
+		self.processing("updating",True)
+
+	def image_update(self,widget,action):
+		image_id = self.currentimage
+		if action:
+			if action == "update":
+				if(self.imagetitle.get_text()):
+					self.mysql_put('UPDATE images SET caption="{caption}" WHERE image_id={image_id} LIMIT 1'.format(caption=self.text_in(self.imagetitle.get_text()), image_id=image_id))
+			elif action == "delete":
+				self.mysql_put('DELETE FROM images WHERE image_id={image_id} LIMIT 1'.format(image_id=image_id))
 
 
 #############
@@ -78,65 +235,56 @@ class upload_3:
 		cursor.close ()
 		return rows
 
-	def mysql_put(self,sql,args):
+	def mysql_put(self,sql):
 		cursor = self.conn.cursor()
-		cursor.execute (sql, args)
+		#print sql
+		cursor.execute (sql)
+		rows = cursor.fetchall()
+		last_id = cursor.lastrowid
 		cursor.close ()
+		return rows,last_id
 
-	def mysql_image_upload(self):
+	def mysql_image_upload(self,horse_id):
 		#if there was an image on the commandline
 		if self.new:
-			sql='INSERT INTO images (shortname, image, caption) VALUES (%s,%s,%s)'
-			args = (self.text_in(self.shortname.get_active_text()), self.imagebuffer.getvalue(), self.text_in(self.imagetitle.get_text()), )
-			self.mysql_put(sql, args)
+			print horse_id
+			print self.text_in(self.imagetitle.get_text())
+			sql='INSERT INTO images (horse_id, image, caption) VALUES (%s,%s,%s)'
+			args = (horse_id, self.imagebuffer.getvalue(), self.text_in(self.imagetitle.get_text()), )
+			cursor = self.conn.cursor()
+			cursor.execute (sql,args)
+			cursor.close ()
 
-	def mysql_image_mangle(self,widget,action):
-		id = self.currentimage
-		print id
-		if action:
-			if action == "update":
-				sql='UPDATE images SET caption=%s WHERE id=%s LIMIT 1'
-				args=(self.text_in(self.imagetitle.get_text()),id)
-			elif action == "delete":
-				sql='DELETE FROM images WHERE id=%s LIMIT 1'
-				args=(id, )
-			self.mysql_put(sql, args)
 
 	def dialog(self,reason):
-		dialog = gtk.Dialog("Error",None,gtk.DIALOG_MODAL | gtk.DIALOG_DESTROY_WITH_PARENT,(gtk.STOCK_OK,gtk.RESPONSE_CLOSE))
+		dialog = gtk.Dialog("Error",self.window,gtk.DIALOG_MODAL | gtk.DIALOG_DESTROY_WITH_PARENT,(gtk.STOCK_OK,gtk.RESPONSE_CLOSE))
 		dialog.vbox.pack_start(gtk.Label(reason))
 		dialog.show_all()
 		dialog.run()
 		dialog.destroy()
 
-	def mysql_update(self):
-		#if the shortname or catogery entry boxes are empty
-		if self.shortname.get_active_text() == '' or self.catogery.get_active_text() == '':
-			self.dialog("you need to fill in atleast the \ncatogery and short name sections")
-		else:
-			update=False
-			#if there was an image on the command line
-			if self.new:
-				rows = self.mysql_get("data","*")
-				#is this a new horse?
-				for row in rows:
-					if self.text_in(self.shortname.get_active_text()) == row["shortname"] and self.text_in(self.catogery.get_active_text()) == row['cat'] :
-						update=False
-						break
-					else:
-						update=True
+	def mysql_update(self,horse_id=None):
 
-			if not update:
+		#if the shortname or catogery entry boxes are empty
+		if self.fullname.get_active_text() == '':
+			self.dialog("you need to fill in atleast the \ncatogery section")
+		else:
+			# if no horse_id passed then assume its a new horse
+			if horse_id:
 				#not a new horse
-				sql='UPDATE data SET fullname=%s, for_sale=%s, section=%s, height=%s, sire=%s, dam=%s, blurb=%s, sort=%s WHERE shortname=%s AND cat=%s LIMIT 1'
-				args=(self.text_in(self.fullname.get_text()), self.text_in(self.forsale.get_active_text()), self.text_in(self.section.get_active_text()), self.text_in(self.height.get_text()), self.text_in(self.sire.get_text()),self.text_in(self.dam.get_text()), self.text_in(self.blurb.get_buffer().get_text(self.blurb.get_buffer().get_start_iter(), self.blurb.get_buffer().get_end_iter())), "15",self.text_in(self.shortname.get_active_text()), self.text_in(self.catogery.get_active_text()), )
-			elif self.new:
-				#new horse
-				sql='INSERT INTO data (shortname, cat, fullname, for_sale, section, height, sire, dam, blurb, sort) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)'
-				args=(self.text_in(self.shortname.get_active_text()), self.text_in(self.catogery.get_active_text()), self.text_in(self.fullname.get_text()), self.text_in(self.forsale.get_active_text()), self.text_in(self.section.get_active_text()), self.text_in(self.height.get_text()), self.text_in(self.sire.get_text()),self.text_in(self.dam.get_text()),  self.text_in(self.blurb.get_buffer().get_text(self.blurb.get_buffer().get_start_iter(), self.blurb.get_buffer().get_end_iter())), "15", )
+				self.mysql_put(
+				'UPDATE data SET fullname="{fullname}", for_sale="{for_sale}", section="{section}", height="{height}", sire="{sire}", dam="{dam}", blurb="{blurb}" WHERE horse_id="{horse_id}" LIMIT 1'.format(
+				horse_id=horse_id, fullname=self.text_in(self.fullname.get_active_text()), for_sale=self.text_in(self.forsale.get_active_text()), section=self.text_in(self.section.get_active_text()),
+				height=self.text_in(self.height.get_text()), sire=self.text_in(self.sire.get_text()), dam=self.text_in(self.dam.get_text()),
+				blurb=self.text_in(self.blurb.get_buffer().get_text(self.blurb.get_buffer().get_start_iter(), self.blurb.get_buffer().get_end_iter()))))
 			else:
-				self.dialog("this should not appear \ntell aaron there was an error in the update/new sql data code")
-			self.mysql_put(sql, args)
+				#new horse
+				result = self.mysql_put('INSERT INTO data SET cat="{cat}", fullname="{fullname}", for_sale="{for_sale}", section="{section}", height="{height}", sire="{sire}", dam="{dam}", blurb="{blurb}"'.format(
+				cat=self.text_in(self.catogery.get_active_text()), fullname=self.text_in(self.fullname.get_active_text()), for_sale=self.text_in(self.forsale.get_active_text()),
+				section=self.text_in(self.section.get_active_text()), height=self.text_in(self.height.get_text()), sire=self.text_in(self.sire.get_text()), dam=self.text_in(self.dam.get_text()),
+				blurb=self.text_in(self.blurb.get_buffer().get_text(self.blurb.get_buffer().get_start_iter(), self.blurb.get_buffer().get_end_iter()))))
+				horse_id = result[1]
+		return(horse_id)
 
 	def mysql_connect(self):
 		self.conn = MySQLdb.connect (host = self.host,user = self.user,passwd = self.password ,db = self.database)
@@ -146,32 +294,34 @@ class upload_3:
 	def text_in(self,text):
 		if text:
 			i = 1
-			var = ["_","/","\'",";",",","\\"," "]
+			var = ["_","/","\'",";",",","\\"," ","\n"]
 			for char in var:
 				text = text.replace(char,"__"+str(i)+"_")
 				i += 1
-			text = text.strip().capitalize()
+			text = text.strip()
+			text = text.replace("&","&amp;")
 			return text
 		else:
 			return ""
 
 	def text_out(self,text):
 		i = 2
-		var = ["/","\'",";",",","\\"," "]
+		var = ["/","\'",";",",","\\"," ","\n"]
 		for char in var:
 			text = text.replace("__"+str(i)+"_",char)
 			i += 1
 		text = text.replace("__1_","_")
+		text = text.replace("&amp;","&")
 		return text
 
-	def show_image(self,widget,id):
+	def show_image(self,widget,image_id):
 		if self.currentimage:
-			self.mysql_image_mangle("","update")
-		if id == "new":
+			self.image_update("","update")
+		if image_id == "new":
 			contents = self.imagebuffer.getvalue()
 			self.imagetitle.set_text("")
 		else:
-			images = self.mysql_get("images","*","id = '"+ str(id) +"'")
+			images = self.mysql_get("images","*","image_id = '"+ str(image_id) +"'")
 			fd = StringIO.StringIO()
 			fd.write(images[0]['image'])
 			contents = fd.getvalue()
@@ -183,33 +333,27 @@ class upload_3:
 		loader.close()
 		self.image.set_from_pixbuf(pixbuf)
 		self.image.show()
-		self.currentimage = id
-
-
-	def update_short_name(self, widget):
-		rows = self.mysql_get("data","shortname","cat = '"+self.text_in(self.catogery.get_active_text())+"'")
-		srows = []
-		for x in rows:
-			if x not in srows:
-				srows.append(x)
-		self.shortname.get_model().clear()
-		for row in srows:
-			self.shortname.append_text(self.text_out(row['shortname']))
+		self.currentimage = image_id
 
 	def update_entry(self, widget):
+		self.processing("loading",False)
 		if self.currentimage:
-			self.mysql_image_mangle("","update")
-		rows = self.mysql_get("data","*","shortname = '"+self.text_in(self.shortname.get_active_text()) +"' AND cat = '"+self.text_in(self.catogery.get_active_text())+"'")
+			self.image_update("","update")
+		rows = self.mysql_get("data","*","fullname = '"+self.text_in(self.fullname.get_active_text())+"'")
 		if(len(rows) == 1):
+			# set horse_id
+			self.horse_id = str(rows[0]['horse_id'])
+			if(rows[0]['cat']):
+				self.catogery.set_active(self.cat_index.index(rows[0]['cat']))
+			else:
+				self.catogery.set_active(-1)
 
-			if(rows[0]['fullname']):
-				self.fullname.set_text(self.text_out(rows[0]['fullname']))
 			if(rows[0]['for_sale']):
 				if (self.text_out(rows[0]['for_sale']).capitalize() == "For sale"):
 					self.forsale.set_active(1)
 				elif (self.text_out(rows[0]['for_sale']).capitalize() == "Sold"):
 					self.forsale.set_active(2)
-				else:
+				elif (self.text_out(rows[0]['for_sale']).capitalize() == "No"):
 					self.forsale.set_active(0)
 			else:
 				self.forsale.set_active(0)
@@ -218,9 +362,9 @@ class upload_3:
 				self.height.set_text(self.text_out(rows[0]['height']))
 
 			if(rows[0]['section']):
-				if (rows[0]['section'])== "Sec__7_A":
+				if (rows[0]['section'])== "sec__7_A":
 					self.section.set_active(1)
-				elif (rows[0]['section'])== "Sec__7_B":
+				elif (rows[0]['section'])== "sec__7_B":
 					self.section.set_active(2)
 				else:
 					self.section.set_active(0)
@@ -229,36 +373,68 @@ class upload_3:
 
 			if(rows[0]['sire']):
 				self.sire.set_text(self.text_out(rows[0]['sire']))
-
+			else:
+				self.sire.set_text("")
 			if(rows[0]['dam']):
 				self.dam.set_text(self.text_out(rows[0]['dam']))
+			else:
+				self.dam.set_text("")
 
+			blurbbuffer = self.blurb.get_buffer()
 			if(rows[0]['blurb']):
-				blurbbuffer = self.blurb.get_buffer()
 				blurbbuffer.set_text(self.text_out(rows[0]['blurb']))
-				self.blurb.set_buffer(blurbbuffer)
-			images = self.mysql_get("images","id","shortname = '"+self.text_in(self.shortname.get_active_text()) +"'")
+			else:
+				blurbbuffer.set_text("")
+			self.blurb.set_buffer(blurbbuffer)
 
+
+			images = self.mysql_get("images","image_id","horse_id = '"+ self.horse_id +"'")
+			#clear image buttons
 			if self.imageset:
 				for line in self.imageset:
 					self.imageset[line].destroy()
 				self.imageset.clear()
 			for image in images:
 				#make a button for each image
-				self.imageset[str(image['id'])] = gtk.Button(str(image['id']))
-				self.imageset[str(image['id'])].connect("clicked", self.show_image, image['id'])
-				self.imagetopvbox.pack_start(self.imageset[str(image['id'])],True)
-				self.imageset[str(image['id'])].show()
+				self.imageset[str(image['image_id'])] = gtk.Button(str(image['image_id']))
+				self.imageset[str(image['image_id'])].connect("clicked", self.show_image, image['image_id'])
+				self.imagetopvbox.pack_start(self.imageset[str(image['image_id'])],True)
+				self.imageset[str(image['image_id'])].show()
 			if not self.new:
 				#if not adding a new image
 				#show the last one (its eaiser :P)
-				self.show_image("",image['id'])
-				self.currentimage = str(image['id'])
-				print self.currentimage
+				self.show_image("",image['image_id'])
+				self.currentimage = str(image['image_id'])
+			#images
+			self.imagetitle.set_sensitive(True)
+			#general
+			self.catogery.set_sensitive(True)
+			self.forsale.set_sensitive(True)
+			self.height.set_sensitive(True)
+			self.section.set_sensitive(True)
+			self.sire.set_sensitive(True)
+			self.dam.set_sensitive(True)
+			self.blurb.set_sensitive(True)
+			if not self.new:
+				if len(images) == 1:
+					self.button_delete.set_sensitive(False)
+				else:
+					self.button_delete.set_sensitive(True)
+				self.button_delete_horse.set_sensitive(True)
+
 		else:
-			self.fullname.set_text("")
+			if not self.new:
+				if self.imageset:
+					for line in self.imageset:
+						self.imageset[line].destroy()
+					self.imageset.clear()
+				self.currentimage = None
+				self.image.clear()
 			self.sire.set_text("")
 			self.dam.set_text("")
+			self.horse_id = None
+			self.catogery.set_active(-1)
+		self.processing("loading",True)
 ##################
 # image processing
 ##################
@@ -282,16 +458,15 @@ class upload_3:
 # gui setup
 ###########
 	def gui_setup(self):
-		self.mysql_connect()
 		self.window = gtk.Window(gtk.WINDOW_TOPLEVEL)
 		self.window.set_title(self.host)
-		self.window.set_default_size(700,855)
+		self.window.set_default_size(700,790)
 		self.window.connect("delete_event", self.delete_event)
 		self.window.set_border_width(10)
 		#layout setup
 		vbox1 = gtk.VBox()
-		self.window.add(vbox1)
 
+		self.window.add(vbox1)
 		#put image above everything else
 		#border around all image related stuff
 		imageframe = gtk.Frame ()
@@ -320,9 +495,9 @@ class upload_3:
 		image_data_box.pack_start(gtk.Label("image caption:"),False)
 		self.imagetitle = gtk.Entry(40)
 		image_data_box.pack_start(self.imagetitle,True)
-		button_delete=gtk.Button("Delete image")
-		button_delete.connect("clicked", self.mysql_image_mangle,"delete",)
-		image_data_box.pack_start(button_delete,False)
+		self.button_delete=gtk.Button("Delete image")
+		self.button_delete.connect("clicked", self.image_update,"delete",)
+		image_data_box.pack_start(self.button_delete,False)
 
 		self.image = gtk.Image()
 		imagewindow.add_with_viewport(self.image)
@@ -341,40 +516,27 @@ class upload_3:
 		vbox3 = gtk.VBox(True)
 		hbox1.pack_start(vbox3, True)
 
-		#catogery
-		vbox2.pack_start(gtk.Label("catogery:"))
-
-		self.catogery = gtk.combo_box_entry_new_text()
-		rows = self.mysql_get("data","cat")
-		srows = []
-		for x in rows:
-			if x not in srows:
-				srows.append(x)
-		for row in srows:
-			self.catogery.append_text(self.text_out(row["cat"]))
-		vbox3.pack_start(self.catogery)
-		self.catogery.connect("changed", self.update_short_name)
-
-
-		#short name
-		vbox2.pack_start(gtk.Label("short name:"))
-		self.shortname = gtk.combo_box_entry_new_text()
-		#rows = self.mysql_get("data","shortname")
-		#srows = []
-		#for x in rows:
-		#	if x not in srows:
-		#		srows.append(x)
-		#for row in srows:
-		#	self.shortname.append_text(self.text_out(row["shortname"]))
-		vbox3.pack_start(self.shortname)
-		self.shortname.connect("changed", self.update_entry)
-
 		#full name
 		vbox2.pack_start(gtk.Label("full name:"))
-		self.fullname = gtk.Entry(40)
-		vbox3.pack_start(self.fullname)
+		self.fullname = gtk.combo_box_entry_new_text()
 
+		fullnamehbox = gtk.HBox(False)
+		vbox3.pack_start(fullnamehbox)
+		fullnamehbox.pack_start(self.fullname,True)
+		self.fullname.connect("changed", self.update_entry)
+		#delete horse button
+		self.button_delete_horse=gtk.Button("Delete Horse")
+		self.button_delete_horse.connect("clicked", self.delete_horse,)
+		fullnamehbox.pack_start(self.button_delete_horse,False)
+
+
+		#catogery
+		vbox2.pack_start(gtk.Label("catogery:"))
+		self.catogery = gtk.combo_box_new_text()
+
+		vbox3.pack_start(self.catogery)
 		#section/for_sale/height
+
 		vbox2.pack_start(gtk.Label("for sale?:"))
 		self.forsale = gtk.combo_box_new_text()
 		forsaleopts = ["No","For sale","Sold"]
@@ -418,25 +580,28 @@ class upload_3:
 		blurbwindow.add(self.blurb)
 
 		#bottom buttons
-		hbox2 = gtk.HBox()
-		vbox1.pack_start(hbox2,False)
-		hbox2.show()
-		exit = gtk.Button("exit")
-		exit.connect("clicked", self.delete_event)
-		hbox2.pack_start(exit,True)
-		update = gtk.Button("update")
-		update.connect("clicked", self.process_update)
-		hbox2.pack_start(update,True)
+		actionbuttons = gtk.HBox()
+		vbox1.pack_start(actionbuttons,False)
+		self.exit = gtk.Button("exit")
+		self.exit.connect("clicked", self.delete_event)
+		actionbuttons.pack_start(self.exit,True)
+		self.update = gtk.Button("update")
+		# FIXME
+		self.update.connect("clicked", self.process_update)
+		actionbuttons.pack_start(self.update,True)
+		self.progressbar = gtk.ProgressBar()
+		#self.progressbar.set_no_show_all(True)
+		actionbuttons.pack_start(self.progressbar)
+
+
 		self.window.show_all()
 		self.window.show()
 ######
 # init
 ######
 	def __init__(self):
-		self.initstuff()
-		self.gui_setup()
-		if self.new:
-			self.image_pre_process()
+		 gobject.idle_add(self.initstuff)
+
 
 def main():
 	gtk.main()
